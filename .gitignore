@@ -1,0 +1,18 @@
+# Archives
+*.zip
+
+# Old files (before rename)
+medtrainer_v3.html
+medtrainer_v3_manifest.json
+medtrainer_v3_sw.js
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
