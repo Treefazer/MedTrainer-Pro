@@ -9,6 +9,8 @@
 <meta name="apple-mobile-web-app-title" content="MedTrainer">
 <title>MedTrainer Pro</title>
 <link rel="manifest" href="manifest.json">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -587,11 +589,22 @@ label{font-size:11px;color:var(--t2);display:block;margin-bottom:4px;}
 
     <div class="sh" style="margin-top:8px;"><div class="sh-title" style="font-size:15px;">Import Anki</div></div>
     <div class="card">
-      <div style="font-size:12px;color:var(--t2);margin-bottom:10px;">Importer un fichier .txt Anki (format tab-separated)</div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:10px;">Importer un paquet Anki <strong style="color:var(--a2)">.apkg</strong> ou un export <strong style="color:var(--a2)">.txt</strong> (tab-separated)</div>
       <div class="fg"><label>Deck cible</label><select id="anki-deck-sel"></select></div>
       <div class="fg"><label>Tag par défaut</label><input type="text" id="anki-tag" value="Traitement" placeholder="Traitement"></div>
-      <button class="btn btn-s btn-full" onclick="document.getElementById('anki-file').click()">📥 Importer .txt Anki</button>
+      <div style="display:flex;gap:7px;">
+        <button class="btn btn-p btn-full" onclick="document.getElementById('apkg-file').click()">📦 Importer .apkg</button>
+        <button class="btn btn-s btn-full" onclick="document.getElementById('anki-file').click()">📄 Importer .txt</button>
+      </div>
+      <input type="file" id="apkg-file" accept=".apkg" style="display:none" onchange="importApkg(event)">
       <input type="file" id="anki-file" accept=".txt" style="display:none" onchange="importAnki(event)">
+      <div id="apkg-progress" style="display:none;margin-top:10px;">
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t2);">
+          <div class="gen-dot active" style="width:8px;height:8px;border-radius:50%;background:var(--a);animation:pulse 1s infinite;flex-shrink:0;"></div>
+          <span id="apkg-status">Lecture du fichier…</span>
+        </div>
+        <div class="gen-bar" style="margin-top:8px;"><div class="gen-fill" id="apkg-fill" style="width:0%"></div></div>
+      </div>
     </div>
 
     <div class="sh" style="margin-top:12px;"><div class="sh-title" style="font-size:15px;">Chapitres importés</div></div>
@@ -1271,6 +1284,112 @@ function importAnki(e){
   const rd=new FileReader();
   rd.onload=ev=>{const lines=ev.target.result.split('\n').filter(l=>l.trim()&&!l.startsWith('#'));const cards=[];lines.forEach(l=>{const p=l.split('\t');if(p.length>=2){const q=p[0].replace(/<[^>]+>/g,'').trim();const a=p[1].replace(/<[^>]+>/g,'').trim();if(q&&a)cards.push({q,a,tag});}});if(!cards.length){toast('Aucune carte — vérifier format .txt Anki','err');return;}const deck=S.decks.find(d=>d.id===did);if(deck){deck.cards.push(...cards);save();toast(`✅ ${cards.length} cartes Anki importées !`,'ok');}else toast('Deck introuvable','err');};
   rd.readAsText(file,'UTF-8');e.target.value='';
+}
+
+// ═══ IMPORT APKG ═══
+let sqlDB=null;
+async function importApkg(e){
+  const file=e.target.files[0];if(!file)return;
+  const did=document.getElementById('anki-deck-sel').value;
+  const tag=document.getElementById('anki-tag').value;
+  const prog=document.getElementById('apkg-progress');
+  const status=document.getElementById('apkg-status');
+  const fill=document.getElementById('apkg-fill');
+  prog.style.display='block';
+  status.textContent='Décompression du fichier .apkg…';fill.style.width='10%';
+
+  try{
+    // 1. Unzip the .apkg
+    const zip=await JSZip.loadAsync(file);
+    status.textContent='Ouverture de la base Anki…';fill.style.width='30%';
+
+    // Find the SQLite DB (collection.anki2 or collection.anki21 or collection.anki2b)
+    let dbFile=null;
+    for(const name of Object.keys(zip.files)){
+      if(name.match(/collection\.anki2[1b]?$/)||name==='collection'){
+        dbFile=zip.files[name];break;
+      }
+    }
+    if(!dbFile){
+      // Some .apkg have just a single .anki2 file at root
+      for(const name of Object.keys(zip.files)){
+        if(name.endsWith('.anki2')||name.endsWith('.anki21')){
+          dbFile=zip.files[name];break;
+        }
+      }
+    }
+    if(!dbFile)throw new Error('Base de données Anki introuvable dans le .apkg');
+
+    const dbData=await dbFile.async('uint8array');
+    status.textContent='Lecture des notes…';fill.style.width='50%';
+
+    // 2. Open SQLite DB
+    const SQL=await initSqlJs({locateFile:f=>`https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}`});
+    const db=new SQL.Database(dbData);
+
+    // 3. Read notes — fields are separated by \x1f
+    let cards=[];
+    try{
+      const res=db.exec("SELECT flds FROM notes");
+      if(res.length>0){
+        const rows=res[0].values;
+        status.textContent=`Extraction de ${rows.length} notes…`;fill.style.width='70%';
+        rows.forEach(row=>{
+          const fields=(row[0]||'').split('\x1f');
+          if(fields.length>=2){
+            const q=fields[0].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
+            const a=fields[1].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
+            if(q&&a)cards.push({q,a,tag});
+          }
+        });
+      }
+    }catch(sqlErr){
+      // Try notetypes for newer Anki format
+      const res=db.exec("SELECT flds FROM notes");
+      if(res.length>0)res[0].values.forEach(row=>{
+        const fields=(row[0]||'').split('\x1f');
+        if(fields.length>=2){
+          const q=fields[0].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
+          const a=fields[1].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
+          if(q&&a)cards.push({q,a,tag});
+        }
+      });
+    }
+
+    db.close();
+    status.textContent='Import terminé !';fill.style.width='100%';
+
+    if(!cards.length){
+      toast('Aucune carte trouvée dans le .apkg','err');
+      setTimeout(()=>{prog.style.display='none';},1500);
+      e.target.value='';return;
+    }
+
+    // 4. Add to deck
+    const deck=S.decks.find(d=>d.id===did);
+    if(deck){
+      // Avoid duplicates
+      const existing=new Set(deck.cards.map(c=>c.q));
+      const newCards=cards.filter(c=>!existing.has(c.q));
+      deck.cards.push(...newCards);
+      save();showFcDecks();
+      toast(`✅ ${newCards.length} cartes importées depuis .apkg !${newCards.length<cards.length?' ('+(cards.length-newCards.length)+' doublons ignorés)':''}` ,'ok');
+    }else{
+      // Create new deck from filename
+      const deckName=file.name.replace('.apkg','').replace(/_/g,' ');
+      S.decks.push({id:'d_'+Date.now(),n:deckName,name:deckName,i:'📦',icon:'📦',c:'blue',color:'blue',cards});
+      save();showFcDecks();
+      toast(`✅ Nouveau deck "${deckName}" créé avec ${cards.length} cartes !`,'ok');
+    }
+
+    setTimeout(()=>{prog.style.display='none';},2000);
+  }catch(err){
+    status.textContent='❌ Erreur : '+err.message;
+    fill.style.width='100%';fill.style.background='var(--r)';
+    setTimeout(()=>{prog.style.display='none';fill.style.background='';},3000);
+    toast('Erreur import .apkg: '+err.message,'err');
+  }
+  e.target.value='';
 }
 
 // ═══ QCM ═══
