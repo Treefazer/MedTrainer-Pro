@@ -607,6 +607,22 @@ label{font-size:11px;color:var(--t2);display:block;margin-bottom:4px;}
       </div>
     </div>
 
+    <div class="sh" style="margin-top:12px;"><div class="sh-title" style="font-size:15px;">Exporter</div></div>
+    <div class="card">
+      <div style="font-size:12px;color:var(--t2);margin-bottom:10px;">Exporter vos decks de flashcards</div>
+      <div class="fg"><label>Deck à exporter</label>
+        <select id="export-deck-sel"><option value="all">Tous les decks</option></select>
+      </div>
+      <div class="fg"><label>Format</label>
+        <select id="export-format">
+          <option value="txt">Anki .txt (tab-separated — réimportable dans Anki)</option>
+          <option value="csv">CSV (Excel, Google Sheets)</option>
+          <option value="json">JSON (sauvegarde complète)</option>
+        </select>
+      </div>
+      <button class="btn btn-p btn-full" onclick="exportDecks()">📤 Exporter</button>
+    </div>
+
     <div class="sh" style="margin-top:12px;"><div class="sh-title" style="font-size:15px;">Chapitres importés</div></div>
     <div class="chapter-list" id="chapter-list">
       <div style="text-align:center;padding:24px;color:var(--t3);font-size:12px;">Aucun chapitre importé</div>
@@ -1087,7 +1103,7 @@ function nav(tab){
   const el=document.getElementById(`s-${tab}`);if(el)el.classList.add('on');
   document.querySelector(`[data-tab="${tab}"]`)?.classList.add('on');
   document.getElementById('content').scrollTop=0;
-  if(tab==='dash')renderDash();else if(tab==='fc')showFcDecks();else if(tab==='qcm')renderQcm();else if(tab==='ecos')showEcosList();else if(tab==='fiches')showFicheList();else if(tab==='retex')showRetexList();else if(tab==='import')renderSpecGrid();else if(tab==='settings')loadSettingsUI();else if(tab==='search'){setTimeout(()=>document.getElementById('search-inp')?.focus(),100);}
+  if(tab==='dash')renderDash();else if(tab==='fc')showFcDecks();else if(tab==='qcm')renderQcm();else if(tab==='ecos')showEcosList();else if(tab==='fiches')showFicheList();else if(tab==='retex')showRetexList();else if(tab==='import'){renderSpecGrid();updateExportSelect();}else if(tab==='settings')loadSettingsUI();else if(tab==='search'){setTimeout(()=>document.getElementById('search-inp')?.focus(),100);}
 }
 
 // ═══ NOTIF ═══
@@ -1196,7 +1212,7 @@ function showFcDecks(){
   document.getElementById('fc-decks').style.display='block';
   const fcv=document.getElementById('fcv');fcv.classList.remove('on');fcv.innerHTML='';
   setChrono(S.chrono||0);
-  document.getElementById('deck-list').innerHTML=S.decks.filter(d=>d.cards.length>0).map(d=>{
+  document.getElementById('deck-list').innerHTML=S.decks.map(d=>{
     const due=d.cards.filter(c=>getCS(c.q).due<=Date.now()).length;
     const favCount=d.cards.filter(c=>S.favs&&S.favs[c.q]).length;
     const nm=d.n||d.name,ic=d.i||d.icon||'📄',cl=d.c||d.color||'blue';
@@ -1287,7 +1303,12 @@ function importAnki(e){
 }
 
 // ═══ IMPORT APKG ═══
-let sqlDB=null;
+let _sqlPromise=null;
+function getSql(){
+  if(!_sqlPromise)_sqlPromise=initSqlJs({locateFile:f=>`https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}`});
+  return _sqlPromise;
+}
+
 async function importApkg(e){
   const file=e.target.files[0];if(!file)return;
   const did=document.getElementById('anki-deck-sel').value;
@@ -1295,101 +1316,170 @@ async function importApkg(e){
   const prog=document.getElementById('apkg-progress');
   const status=document.getElementById('apkg-status');
   const fill=document.getElementById('apkg-fill');
+  fill.style.background='';
   prog.style.display='block';
-  status.textContent='Décompression du fichier .apkg…';fill.style.width='10%';
+
+  const sizeMB=Math.round(file.size/1024/1024);
+  status.textContent=`Décompression (${sizeMB} Mo)… Patience pour les gros fichiers`;fill.style.width='5%';
+
+  // Let UI update before heavy work
+  await new Promise(r=>setTimeout(r,50));
 
   try{
-    // 1. Unzip the .apkg
-    const zip=await JSZip.loadAsync(file);
-    status.textContent='Ouverture de la base Anki…';fill.style.width='30%';
+    // 1. Preload sql.js in parallel with unzip
+    const sqlPromise=getSql();
 
-    // Find the SQLite DB (collection.anki2 or collection.anki21 or collection.anki2b)
+    // 2. Unzip the .apkg
+    const zip=await JSZip.loadAsync(file,{
+      createFolders:false
+    });
+    status.textContent='Recherche de la base Anki…';fill.style.width='25%';
+    await new Promise(r=>setTimeout(r,30));
+
+    // Find the SQLite DB
     let dbFile=null;
-    for(const name of Object.keys(zip.files)){
-      if(name.match(/collection\.anki2[1b]?$/)||name==='collection'){
+    const names=Object.keys(zip.files);
+    for(const name of names){
+      const nl=name.toLowerCase();
+      if(nl==='collection.anki21'||nl==='collection.anki2'||nl==='collection.anki2b'||nl==='collection'){
         dbFile=zip.files[name];break;
       }
     }
     if(!dbFile){
-      // Some .apkg have just a single .anki2 file at root
-      for(const name of Object.keys(zip.files)){
-        if(name.endsWith('.anki2')||name.endsWith('.anki21')){
-          dbFile=zip.files[name];break;
-        }
+      for(const name of names){
+        if(name.match(/\.anki2[1b]?$/i)){dbFile=zip.files[name];break;}
       }
     }
-    if(!dbFile)throw new Error('Base de données Anki introuvable dans le .apkg');
+    if(!dbFile)throw new Error('Base Anki introuvable. Fichiers trouvés: '+names.slice(0,5).join(', '));
+
+    status.textContent=`Extraction de la base (peut prendre 30s+)…`;fill.style.width='35%';
+    await new Promise(r=>setTimeout(r,30));
 
     const dbData=await dbFile.async('uint8array');
-    status.textContent='Lecture des notes…';fill.style.width='50%';
+    status.textContent='Chargement SQLite…';fill.style.width='50%';
+    await new Promise(r=>setTimeout(r,30));
 
-    // 2. Open SQLite DB
-    const SQL=await initSqlJs({locateFile:f=>`https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}`});
+    // 3. Open SQLite DB
+    const SQL=await sqlPromise;
     const db=new SQL.Database(dbData);
 
-    // 3. Read notes — fields are separated by \x1f
+    // 4. Read notes — try multiple table structures
     let cards=[];
+    let rows=[];
     try{
       const res=db.exec("SELECT flds FROM notes");
-      if(res.length>0){
-        const rows=res[0].values;
-        status.textContent=`Extraction de ${rows.length} notes…`;fill.style.width='70%';
-        rows.forEach(row=>{
-          const fields=(row[0]||'').split('\x1f');
-          if(fields.length>=2){
-            const q=fields[0].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
-            const a=fields[1].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
-            if(q&&a)cards.push({q,a,tag});
-          }
-        });
-      }
-    }catch(sqlErr){
-      // Try notetypes for newer Anki format
-      const res=db.exec("SELECT flds FROM notes");
-      if(res.length>0)res[0].values.forEach(row=>{
-        const fields=(row[0]||'').split('\x1f');
+      if(res.length>0)rows=res[0].values;
+    }catch(e1){
+      try{
+        const res=db.exec("SELECT flds FROM cards JOIN notes ON cards.nid=notes.id");
+        if(res.length>0)rows=res[0].values;
+      }catch(e2){}
+    }
+
+    status.textContent=`Extraction de ${rows.length} notes…`;fill.style.width='70%';
+    await new Promise(r=>setTimeout(r,30));
+
+    // Process in batches to avoid freezing
+    const BATCH=500;
+    for(let i=0;i<rows.length;i+=BATCH){
+      const batch=rows.slice(i,i+BATCH);
+      batch.forEach(row=>{
+        const raw=row[0];if(!raw)return;
+        const fields=(typeof raw==='string'?raw:String(raw)).split('\x1f');
         if(fields.length>=2){
-          const q=fields[0].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
-          const a=fields[1].replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').trim();
-          if(q&&a)cards.push({q,a,tag});
+          const q=fields[0].replace(/<[^>]+>/g,'').replace(/&nbsp;/gi,' ').replace(/\s+/g,' ').trim();
+          const a=fields.slice(1).map(f=>f.replace(/<[^>]+>/g,'').replace(/&nbsp;/gi,' ').replace(/\s+/g,' ').trim()).filter(Boolean).join(' | ');
+          if(q&&a&&q.length>1)cards.push({q,a,tag});
         }
       });
+      if(rows.length>BATCH){
+        const pct=70+Math.round(i/rows.length*25);
+        fill.style.width=pct+'%';
+        status.textContent=`Traitement ${Math.min(i+BATCH,rows.length)}/${rows.length} notes…`;
+        await new Promise(r=>setTimeout(r,10));
+      }
     }
 
     db.close();
-    status.textContent='Import terminé !';fill.style.width='100%';
 
     if(!cards.length){
       toast('Aucune carte trouvée dans le .apkg','err');
-      setTimeout(()=>{prog.style.display='none';},1500);
+      status.textContent='❌ 0 cartes trouvées';
+      setTimeout(()=>{prog.style.display='none';},2500);
       e.target.value='';return;
     }
 
-    // 4. Add to deck
+    status.textContent=`Sauvegarde de ${cards.length} cartes…`;fill.style.width='95%';
+    await new Promise(r=>setTimeout(r,30));
+
+    // 5. Add to deck
     const deck=S.decks.find(d=>d.id===did);
     if(deck){
-      // Avoid duplicates
       const existing=new Set(deck.cards.map(c=>c.q));
       const newCards=cards.filter(c=>!existing.has(c.q));
       deck.cards.push(...newCards);
       save();showFcDecks();
-      toast(`✅ ${newCards.length} cartes importées depuis .apkg !${newCards.length<cards.length?' ('+(cards.length-newCards.length)+' doublons ignorés)':''}` ,'ok');
+      const dupes=cards.length-newCards.length;
+      toast(`✅ ${newCards.length} cartes importées !${dupes>0?' ('+dupes+' doublons ignorés)':''}` ,'ok');
+      status.textContent=`✅ ${newCards.length} cartes ajoutées au deck !`;
     }else{
-      // Create new deck from filename
-      const deckName=file.name.replace('.apkg','').replace(/_/g,' ');
+      const deckName=file.name.replace(/\.apkg$/i,'').replace(/_/g,' ');
       S.decks.push({id:'d_'+Date.now(),n:deckName,name:deckName,i:'📦',icon:'📦',c:'blue',color:'blue',cards});
       save();showFcDecks();
-      toast(`✅ Nouveau deck "${deckName}" créé avec ${cards.length} cartes !`,'ok');
+      toast(`✅ Deck "${deckName}" créé — ${cards.length} cartes !`,'ok');
+      status.textContent=`✅ Deck "${deckName}" créé avec ${cards.length} cartes !`;
     }
-
-    setTimeout(()=>{prog.style.display='none';},2000);
+    fill.style.width='100%';
+    setTimeout(()=>{prog.style.display='none';},3000);
   }catch(err){
-    status.textContent='❌ Erreur : '+err.message;
+    console.error('APKG import error:',err);
+    status.textContent='❌ '+err.message;
     fill.style.width='100%';fill.style.background='var(--r)';
-    setTimeout(()=>{prog.style.display='none';fill.style.background='';},3000);
-    toast('Erreur import .apkg: '+err.message,'err');
+    setTimeout(()=>{prog.style.display='none';fill.style.background='';},4000);
+    toast('Erreur: '+err.message,'err');
   }
   e.target.value='';
+}
+
+// ═══ EXPORT DECKS ═══
+function updateExportSelect(){
+  const sel=document.getElementById('export-deck-sel');if(!sel)return;
+  sel.innerHTML='<option value="all">Tous les decks ('+S.decks.reduce((s,d)=>s+d.cards.length,0)+' cartes)</option>'+
+    S.decks.filter(d=>d.cards.length>0).map(d=>`<option value="${d.id}">${d.i||'📄'} ${d.n||d.name} (${d.cards.length} cartes)</option>`).join('');
+}
+function exportDecks(){
+  const did=document.getElementById('export-deck-sel').value;
+  const fmt=document.getElementById('export-format').value;
+  const decks=did==='all'?S.decks:S.decks.filter(d=>d.id===did);
+  const allCards=decks.flatMap(d=>d.cards.map(c=>({...c,deck:d.n||d.name})));
+  if(!allCards.length){toast('Aucune carte à exporter','err');return;}
+
+  let content,filename,mime;
+  const date=new Date().toISOString().split('T')[0];
+
+  if(fmt==='txt'){
+    // Anki tab-separated format
+    content=allCards.map(c=>c.q+'\t'+c.a+'\t'+c.tag).join('\n');
+    filename=`medtrainer_${date}.txt`;
+    mime='text/plain';
+  }else if(fmt==='csv'){
+    content='Question;Réponse;Tag;Deck\n'+
+      allCards.map(c=>'"'+c.q.replace(/"/g,'""')+'";\"'+c.a.replace(/"/g,'""')+'";\"'+(c.tag||'')+'";\"'+c.deck+'"').join('\n');
+    filename=`medtrainer_${date}.csv`;
+    mime='text/csv';
+  }else{
+    content=JSON.stringify({decks:decks.map(d=>({name:d.n||d.name,icon:d.i||d.icon,color:d.c||d.color,cards:d.cards})),exported:date,app:'MedTrainer Pro'},null,2);
+    filename=`medtrainer_${date}.json`;
+    mime='application/json';
+  }
+
+  const blob=new Blob(['\ufeff'+content],{type:mime+';charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`✅ ${allCards.length} cartes exportées (${fmt.toUpperCase()})`,'ok');
 }
 
 // ═══ QCM ═══
