@@ -677,11 +677,11 @@ label{font-size:11px;color:var(--t2);display:block;margin-bottom:4px;}
     <div id="ecos-list-v" style="padding:0;">
       <div class="sh"><div class="sh-title">ECOS</div><button class="btn btn-p btn-sm" onclick="openAddEcos()">+ Nouveau</button></div>
       <div style="background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.15);border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:11.5px;color:var(--t2);">
-        🤖 <strong style="color:var(--a2)">Mode IA</strong> — Claude joue le patient (clé API requise)<br>
+        🤖 <strong style="color:var(--a2)">Mode IA</strong> — Gemini joue le patient (clé API gratuite requise)<br>
         📋 <strong style="color:var(--g2)">Mode Solo</strong> — grille d'auto-évaluation manuelle
       </div>
       <div style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius:10px;padding:11px 13px;margin-bottom:12px;font-size:12px;color:var(--t2);">
-        🤖 Claude joue le patient et évalue ta démarche. <strong style="color:var(--a2)">Clé API requise</strong> dans Paramètres.
+        🤖 Gemini joue le patient et évalue ta démarche. <strong style="color:var(--g2)">Clé API gratuite</strong> dans ⚙️ Paramètres.
       </div>
       <div class="ecos-list" id="ecos-list"></div>
     </div>
@@ -764,11 +764,15 @@ label{font-size:11px;color:var(--t2);display:block;margin-bottom:4px;}
     <div class="sh-title" style="font-family:'Syne',sans-serif;font-size:19px;font-weight:700;margin-bottom:16px;">Paramètres</div>
 
     <div class="set-section">
-      <div class="set-t">API Claude (ECOS + Import PDF)</div>
+      <div class="set-t">API Google Gemini (ECOS + Import PDF + RETEX)</div>
       <div class="card">
-        <div style="font-size:12px;color:var(--t2);margin-bottom:10px;">Obtiens ta clé sur <strong style="color:var(--a2)">console.anthropic.com</strong> → API Keys → Create key.</div>
-        <div class="fg"><label>Clé API (sk-ant-…)</label><input type="password" id="api-input" placeholder="sk-ant-api03-…"></div>
+        <div style="font-size:12px;color:var(--t2);margin-bottom:10px;">
+          🆓 <strong style="color:var(--g2)">100% Gratuit</strong> — Obtiens ta clé sur <strong style="color:var(--a2)">aistudio.google.com</strong> → Get API Key → Create API Key.
+        </div>
+        <div class="fg"><label>Clé API Gemini (AIza…)</label><input type="password" id="api-input" placeholder="AIzaSy..."></div>
         <button class="btn btn-p btn-full" onclick="saveApiKey()">💾 Sauvegarder</button>
+        <div id="api-test-result" style="margin-top:8px;font-size:11px;display:none"></div>
+        <button class="btn btn-s btn-full" style="margin-top:6px" onclick="testApiKey()">🧪 Tester la clé</button>
       </div>
     </div>
 
@@ -806,7 +810,7 @@ label{font-size:11px;color:var(--t2);display:block;margin-bottom:4px;}
     </div>
 
     <div style="text-align:center;padding:16px 0;font-size:10.5px;color:var(--t3);">
-      MedTrainer Pro v2.0 — IADE → Médecine<br>Données stockées localement sur votre appareil
+      MedTrainer Pro v3.0 — IADE → Médecine<br>IA par Google Gemini (gratuit) · Données stockées localement
     </div>
   </div>
 
@@ -1587,7 +1591,31 @@ function rmTyping(){document.getElementById('typ')?.remove();}
 async function aiSend(msg,silent=false){
   if(!silent)chatH.push({role:'user',content:msg});
   document.getElementById('csend').disabled=true;showTyping();
-  try{const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:600,system:CE.sys,messages:silent?[{role:'user',content:msg}]:chatH})});const data=await r.json();rmTyping();if(data.error){addMsg('sys','⚠️ '+data.error.message);return;}const t=data.content?.[0]?.text||'…';addMsg('pat',t);if(!silent)chatH.push({role:'assistant',content:t});if(t.includes('/10')&&t.includes('pts')){S.ecosCount++;addXP(50);logAct();save();}}catch(e){rmTyping();addMsg('sys','⚠️ Erreur réseau.');}
+  try{
+    // Build Gemini conversation format
+    const sysInstruction=CE.sys;
+    const contents=silent
+      ?[{role:'user',parts:[{text:msg}]}]
+      :chatH.map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]}));
+
+    const url=`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${S.apiKey}`;
+    const r=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        systemInstruction:{parts:[{text:sysInstruction}]},
+        contents,
+        generationConfig:{maxOutputTokens:600,temperature:0.8}
+      })
+    });
+    const data=await r.json();
+    rmTyping();
+    if(data.error){addMsg('sys','⚠️ '+data.error.message);return;}
+    const t=data.candidates?.[0]?.content?.parts?.[0]?.text||'…';
+    addMsg('pat',t);
+    if(!silent)chatH.push({role:'assistant',content:t});
+    if(t.includes('/10')){S.ecosCount++;addXP(50);logAct();save();}
+  }catch(e){rmTyping();addMsg('sys','⚠️ Erreur réseau: '+e.message);}
   document.getElementById('csend').disabled=false;
 }
 function sendChat(){const inp=document.getElementById('cinput');const msg=inp.value.trim();if(!msg)return;inp.value='';inp.style.height='auto';addMsg('me',msg);chatH.push({role:'user',content:msg});aiSend(msg);}
@@ -1710,7 +1738,17 @@ function doSearch(q){
 }
 
 // ═══ SETTINGS ═══
-function saveApiKey(){const k=document.getElementById('api-input').value.trim();if(!k.startsWith('sk-')){toast('Clé invalide','err');return;}S.apiKey=k;save();toast('Clé API sauvegardée ✓','ok');}
+function saveApiKey(){const k=document.getElementById('api-input').value.trim();if(!k.startsWith('AIza')){toast('Clé invalide — doit commencer par AIza','err');return;}S.apiKey=k;save();toast('Clé Gemini sauvegardée ✓','ok');}
+async function testApiKey(){
+  const res=document.getElementById('api-test-result');
+  res.style.display='block';res.style.color='var(--t2)';res.textContent='🔄 Test en cours…';
+  try{
+    const r=await callAI('Réponds uniquement "OK ça marche" en français.');
+    res.style.color='var(--g2)';res.textContent='✅ Connexion réussie : '+r.substring(0,50);
+  }catch(e){
+    res.style.color='var(--r2)';res.textContent='❌ Erreur : '+e.message;
+  }
+}
 function saveSettings(){S.settings.name=document.getElementById('pref-name').value;S.settings.goal=document.getElementById('pref-goal').value;S.settings.cardsPerSession=parseInt(document.getElementById('pref-cards').value);save();toast('Paramètres enregistrés ✓','ok');}
 function loadSettingsUI(){document.getElementById('pref-name').value=S.settings.name||'';document.getElementById('pref-goal').value=S.settings.goal||'passerelle';document.getElementById('pref-cards').value=S.settings.cardsPerSession||20;if(S.apiKey)document.getElementById('api-input').value=S.apiKey;populateSelects();}
 function exportData(){const b=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`medtrainer_v3_${new Date().toISOString().split('T')[0]}.json`;a.click();}
@@ -1719,7 +1757,20 @@ function triggerImport(){document.getElementById('import-data-file').click();}
 function resetData(){if(!confirm('Réinitialiser toutes les données ?'))return;localStorage.removeItem('mt_v3');location.reload();}
 
 // ═══ API ═══
-async function callAI(prompt){const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2000,messages:[{role:'user',content:prompt}]})});const data=await r.json();if(data.error)throw new Error(data.error.message);return data.content?.[0]?.text||'';}
+async function callAI(prompt){
+  const url=`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${S.apiKey}`;
+  const r=await fetch(url,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      contents:[{parts:[{text:prompt}]}],
+      generationConfig:{maxOutputTokens:2048,temperature:0.7}
+    })
+  });
+  const data=await r.json();
+  if(data.error)throw new Error(data.error.message||data.error.status);
+  return data.candidates?.[0]?.content?.parts?.[0]?.text||'';
+}
 
 // ═══ PWA ═══
 if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));

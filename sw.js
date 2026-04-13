@@ -21,7 +21,7 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  if (e.request.url.includes('api.anthropic.com')) {
+  if (e.request.url.includes('generativelanguage.googleapis.com') || e.request.url.includes('api.anthropic.com')) {
     return;
   }
   e.respondWith(
