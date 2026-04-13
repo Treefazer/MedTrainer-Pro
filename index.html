@@ -492,8 +492,11 @@ label{font-size:11px;color:var(--t2);display:block;margin-bottom:4px;}
 
 /* Deck actions */
 .deck-acts{display:flex;gap:3px;margin-left:6px;}
-.deck-act{width:26px;height:26px;border-radius:6px;border:1px solid var(--border2);background:var(--card2);color:var(--t3);font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
-.deck-act:hover{background:var(--border2);color:var(--t);}
+.deck-act{width:30px;height:30px;border-radius:8px;border:1px solid var(--border2);background:var(--card2);color:var(--t3);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
+.deck-act:hover,.deck-act:active{background:var(--border2);color:var(--t);}
+.deck-act.add{background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.3);color:var(--a2);font-size:16px;font-weight:700;}
+.deck-act.add:hover,.deck-act.add:active{background:rgba(59,130,246,0.25);}
+.deck-act.del{font-size:12px;}
 
 /* Spec grid (import) */
 .spec-grid{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
@@ -1220,15 +1223,18 @@ function showFcDecks(){
     const due=d.cards.filter(c=>getCS(c.q).due<=Date.now()).length;
     const favCount=d.cards.filter(c=>S.favs&&S.favs[c.q]).length;
     const nm=d.n||d.name,ic=d.i||d.icon||'📄',cl=d.c||d.color||'blue';
-    return `<div class="deck-c dc-${cl}" onclick="startDeck('${d.id}')">
-      <div class="deck-ico">${ic}</div>
-      <div class="deck-info"><div class="deck-n">${nm}</div><div class="deck-m">${d.cards.length} cartes${favCount?` · ⭐${favCount}`:''}</div></div>
-      ${due>0?`<div class="deck-due">${due}⏰</div>`:`<div class="deck-ok">✓</div>`}
-      <div class="deck-acts">
-        <button class="deck-act" onclick="event.stopPropagation();openAddCard('${d.id}')">+</button>
-        <button class="deck-act" onclick="event.stopPropagation();delDeck('${d.id}')">🗑️</button>
+    return `<div class="deck-c dc-${cl}">
+      <div style="display:flex;align-items:center;gap:10px;flex:1;cursor:pointer;" onclick="startDeck('${d.id}')">
+        <div class="deck-ico">${ic}</div>
+        <div class="deck-info"><div class="deck-n">${nm}</div><div class="deck-m">${d.cards.length} cartes${favCount?` · ⭐${favCount}`:''}</div></div>
+        ${due>0?`<div class="deck-due">${due}⏰</div>`:`<div class="deck-ok">✓</div>`}
       </div>
-    </div>`;
+      <div class="deck-acts">
+        <button class="deck-act add" onclick="event.stopPropagation();openAddCard('${d.id}')" title="Ajouter une carte">＋</button>
+        <button class="deck-act del" onclick="event.stopPropagation();delDeck('${d.id}')" title="Supprimer">🗑️</button>
+      </div>
+    </div>
+    ${d.cards.length===0?`<div style="text-align:center;padding:8px;margin:-6px 0 10px;"><button class="btn btn-p btn-sm" onclick="openAddCard('${d.id}')">＋ Ajouter ta première carte</button></div>`:''}`;
   }).join('')+'<button class="btn btn-s btn-full" style="margin-top:6px" onclick="openAddDeck()">+ Nouveau deck</button>';
 }
 function startDeck(id){const d=S.decks.find(x=>x.id===id);if(!d)return;FC.cards=[...d.cards].sort(()=>Math.random()-.5).slice(0,S.settings.cardsPerSession||20);FC.idx=0;showFcView();}
